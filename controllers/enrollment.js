@@ -1,46 +1,76 @@
-// Shared in-memory course + enrollment data
-const enrollments = [];
-const courses = [
-  { id: 1, title: "Tajweed Level 1" },
-  { id: 2, title: "Hifdh Juz Amma" },
-];
+const Enrollment = require("../models/enrollment");
+const Course = require("../models/course");
 
-exports.enrollToTabseraQuranCourse = (req, res) => {
-  const studentId = req.user.id;
-  const courseId = parseInt(req.params.id);
+exports.enrollToTabseraQuranCourse = async (req, res) => {
+  try {
+    const studentId = req.user.id;
+    const courseId = req.params.id;
 
-  const alreadyEnrolled = enrollments.some(
-    (e) => e.studentId === studentId && e.courseId === courseId
-  );
-  if (alreadyEnrolled) {
-    return res.status(400).json({ message: "Already enrolled" });
+    const course = await Course.findById(courseId);
+    if (!course) return res.status(404).json({ message: "Course not found" });
+
+    const existing = await Enrollment.findOne({ studentId, courseId });
+    if (existing) {
+      return res.status(400).json({ message: "Already enrolled" });
+    }
+
+    const alreadyEnrolled = await Enrollment.findOne({
+      student: studentId,
+      status: "active",
+    });
+
+    if (alreadyEnrolled) {
+      return res.status(400).json({
+        message:
+          "You are already enrolled in another course. Please complete or revoke it before enrolling again.",
+      });
+    }
+
+    await Enrollment.create({ studentId, courseId });
+    res.json({ message: "Enrolled successfully" });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to enroll" });
   }
-
-  enrollments.push({ id: Date.now(), studentId, courseId, status: "active" });
-  res.json({ message: "Enrolled successfully" });
 };
 
-exports.terminateEnrollment = (req, res) => {
-  const studentId = req.user.id;
-  const courseId = parseInt(req.params.id);
+exports.terminateEnrollment = async (req, res) => {
+  try {
+    const studentId = req.user.id;
+    const courseId = req.params.id;
 
-  const enrollment = enrollments.find(
-    (e) => e.studentId === studentId && e.courseId === courseId
-  );
-  if (!enrollment)
-    return res.status(404).json({ message: "Enrollment not found" });
+    const enrollment = await Enrollment.findOne({
+      student: studentId,
+      course: courseId,
+      status: "active", // or 'accepted'
+    });
 
-  enrollment.status = "completed";
-  res.json({ message: "Enrollment marked as completed" });
+    if (!enrollment) {
+      return res
+        .status(404)
+        .json({ message: "Enrollment not found or not active" });
+    }
+
+    enrollment.status = "completed";
+    enrollment.completedAt = new Date();
+    await enrollment.save();
+
+    res.status(200).json({ message: "Course marked as completed" });
+  } catch (err) {
+    console.error("Complete error:", err);
+    res.status(500).json({ message: "Failed to complete course" });
+  }
 };
 
-exports.revokeTabseraQuranEnrollment = (req, res) => {
-  const courseId = parseInt(req.params.id);
-  const index = enrollments.findIndex((e) => e.courseId === courseId);
+exports.revokeTabseraQuranEnrollment = async (req, res) => {
+  try {
+    const courseId = req.params.id;
 
-  if (index === -1)
-    return res.status(404).json({ message: "Enrollment not found" });
+    const deleted = await Enrollment.findOneAndDelete({ courseId });
+    if (!deleted)
+      return res.status(404).json({ message: "Enrollment not found" });
 
-  enrollments.splice(index, 1);
-  res.json({ message: "Enrollment revoked" });
+    res.json({ message: "Enrollment revoked" });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to revoke enrollment" });
+  }
 };

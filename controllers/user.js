@@ -1,157 +1,275 @@
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
+const { OAuth2Client } = require("google-auth-library");
+const client = new OAuth2Client();
 
-const users = []; // Temporary in-memory array (replace with DB in production)
-
-// Utility to generate fake confirmation codes
-const generateCode = () =>
-  Math.floor(100000 + Math.random() * 900000).toString();
+const User = require("../models/user");
 
 exports.createTabseraQuranUser = async (req, res) => {
-  const { name, email, password } = req.body;
-  if (users.find((u) => u.email === email)) {
-    return res.status(400).json({ message: "User already exists" });
+  try {
+    const {
+      firstName,
+      lastName,
+      userName,
+      email,
+      password,
+      country,
+      gender,
+      language,
+    } = req.body;
+
+    const existing = await User.findOne({ email });
+    if (existing)
+      return res.status(400).json({ message: "User already exists" });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const confirmationCode = Math.floor(
+      100000 + Math.random() * 900000
+    ).toString();
+
+    await User.create({
+      firstName,
+      lastName,
+      userName,
+      email,
+      password: hashedPassword,
+      country,
+      gender,
+      language,
+      confirmationCode,
+      confirmed: false,
+      role: "student",
+    });
+
+    res
+      .status(201)
+      .json({ message: "User registered. Please confirm your email." });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Registration failed" });
   }
-
-  const hashedPassword = await bcrypt.hash(password, 10);
-  const newUser = {
-    id: Date.now(),
-    name,
-    email,
-    password: hashedPassword,
-    role: "student",
-    confirmed: false,
-    confirmationCode: generateCode(),
-  };
-
-  users.push(newUser);
-
-  // Normally you'd send this via email
-  console.log("Confirmation code:", newUser.confirmationCode);
-
-  res
-    .status(201)
-    .json({ message: "User registered. Please verify your email." });
 };
 
-exports.confirmTabseraQuranUser = (req, res) => {
-  const { email, code } = req.body;
-  const user = users.find((u) => u.email === email);
+exports.confirmTabseraQuranUser = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
 
-  if (!user) return res.status(404).json({ message: "User not found" });
-  if (user.confirmed)
-    return res.status(400).json({ message: "Already confirmed" });
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: "User not found" });
 
-  if (user.confirmationCode === code) {
+    if (user.confirmed) {
+      return res.status(400).json({ message: "User already confirmed" });
+    }
+
+    if (user.confirmationCode !== otp) {
+      return res.status(400).json({ message: "Invalid OTP code" });
+    }
+
     user.confirmed = true;
-    return res.json({ message: "User confirmed successfully" });
-  }
+    await user.save();
 
-  res.status(400).json({ message: "Invalid code" });
+    res.status(200).json({ message: "User successfully confirmed" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Confirmation failed" });
+  }
+};
+
+exports.checkUserForTabseraQuran = async (req, res) => {
+  try {
+    const { email } = req.params;
+    const user = await User.findOne({ email });
+    res.json({ exists: !!user });
+  } catch (err) {
+    res.status(500).json({ message: "Error checking user" });
+  }
 };
 
 exports.loginTabseraQuran = async (req, res) => {
-  const { email, password } = req.body;
-  const user = users.find((u) => u.email === email);
+  try {
+    const { email, password } = req.body;
 
-  if (!user || !(await bcrypt.compare(password, user.password))) {
-    return res.status(401).json({ message: "Invalid credentials" });
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword)
+      return res.status(400).json({ message: "Invalid password" });
+
+    if (!user.confirmed) {
+      return res
+        .status(400)
+        .json({ message: "Please confirm your email first" });
+    }
+
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "1d" }
+    );
+
+    res.status(200).json({
+      token,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        userName: user.userName,
+        email: user.email,
+        country: user.country,
+        gender: user.gender,
+        language: user.language,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Login failed" });
   }
-
-  const token = jwt.sign({ id: user.id, role: user.role }, "secret", {
-    expiresIn: "1d",
-  });
-
-  res.json({
-    token,
-    user: { id: user.id, name: user.name, email: user.email },
-  });
 };
 
-exports.googleLoginTabseraQuran = (req, res) => {
-  const { email } = req.body;
-  let user = users.find((u) => u.email === email);
+exports.googleLoginTabseraQuran = async (req, res) => {
+  try {
+    const { email } = req.body;
+    let user = await User.findOne({ email });
 
-  if (!user) {
-    user = {
-      id: Date.now(),
-      name: "Google User",
-      email,
-      password: null,
-      role: "student",
-      confirmed: true,
-    };
-    users.push(user);
+    if (!user) {
+      user = await User.create({
+        name: "Google User",
+        email,
+        role: "student",
+        confirmed: true,
+        googleLinked: true,
+      });
+    }
+
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "1d",
+      }
+    );
+
+    res.json({
+      token,
+      user: { id: user._id, name: user.name, email: user.email },
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Google login failed" });
   }
-
-  const token = jwt.sign({ id: user.id, role: user.role }, "secret", {
-    expiresIn: "1d",
-  });
-  res.json({ token, user });
 };
 
-exports.resendCodeForTabseraQuran = (req, res) => {
-  const { email } = req.body;
-  const user = users.find((u) => u.email === email);
-  if (!user) return res.status(404).json({ message: "User not found" });
+exports.resendCodeForTabseraQuran = async (req, res) => {
+  try {
+    const { email } = req.body;
 
-  user.confirmationCode = generateCode();
-  console.log("Resent confirmation code:", user.confirmationCode);
-  res.json({ message: "Confirmation code resent" });
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+    user.confirmationCode = newCode;
+    await user.save();
+
+    console.log("📨 Resent confirmation code:", newCode); // Replace with actual email or SMS
+
+    res.status(200).json({ message: "Confirmation code resent" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to resend confirmation code" });
+  }
 };
 
-exports.forgotPasswordForTabseraQuran = (req, res) => {
-  const { email } = req.body;
-  const user = users.find((u) => u.email === email);
-  if (!user) return res.status(404).json({ message: "User not found" });
+exports.forgotPasswordForTabseraQuran = async (req, res) => {
+  try {
+    const { email } = req.body;
 
-  user.resetCode = generateCode();
-  console.log("Reset code:", user.resetCode);
-  res.json({ message: "Reset code sent" });
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+    user.confirmationCode = resetCode;
+    await user.save();
+
+    console.log("📨 Password reset code:", resetCode); // Replace with actual email/SMS later
+
+    res.status(200).json({ message: "Reset code sent" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to process request" });
+  }
 };
 
 exports.resetPasswordForTabseraQuran = async (req, res) => {
-  const { email, code, password } = req.body;
-  const user = users.find((u) => u.email === email);
-  if (!user || user.resetCode !== code) {
-    return res.status(400).json({ message: "Invalid reset code" });
-  }
+  try {
+    const { email, otp, password } = req.body;
 
-  user.password = await bcrypt.hash(password, 10);
-  delete user.resetCode;
-  res.json({ message: "Password reset successfully" });
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    if (user.confirmationCode !== otp) {
+      return res.status(400).json({ message: "Invalid OTP" });
+    }
+
+    user.password = await bcrypt.hash(password, 10);
+    user.confirmationCode = undefined;
+    await user.save();
+
+    res.status(200).json({ message: "Password reset successful" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to reset password" });
+  }
 };
 
 exports.teacherLoginForTabseraQuran = async (req, res) => {
-  const { email, password } = req.body;
-  const user = users.find((u) => u.email === email && u.role === "teacher");
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email, role: "teacher" });
 
-  if (!user || !(await bcrypt.compare(password, user.password))) {
-    return res.status(401).json({ message: "Invalid credentials" });
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "1d",
+      }
+    );
+
+    res.json({
+      token,
+      user: { id: user._id, name: user.name, email: user.email },
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Teacher login failed" });
   }
-
-  const token = jwt.sign({ id: user.id, role: user.role }, "secret", {
-    expiresIn: "1d",
-  });
-  res.json({
-    token,
-    user: { id: user.id, name: user.name, email: user.email },
-  });
 };
 
-exports.getProfileForTabseraQuran = (req, res) => {
-  const user = users.find((u) => u.id === req.user.id);
-  if (!user) return res.status(404).json({ message: "User not found" });
-  res.json({ user });
+exports.getProfileForTabseraQuran = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select("-password");
+    if (!user) return res.status(404).json({ message: "User not found" });
+    res.json({ user });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to load profile" });
+  }
 };
 
-exports.editProfileForTabseraQuran = (req, res) => {
-  const user = users.find((u) => u.id === req.user.id);
-  if (!user) return res.status(404).json({ message: "User not found" });
+exports.editProfileForTabseraQuran = async (req, res) => {
+  try {
+    const updates = req.body;
+    const user = await User.findByIdAndUpdate(req.user.id, updates, {
+      new: true,
+    });
 
-  const updates = req.body;
-  Object.assign(user, updates);
-  res.json({ message: "Profile updated", user });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    res.json({ message: "Profile updated", user });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to update profile" });
+  }
 };
 
 exports.getProfileMetaForTabseraQuran = (req, res) => {
@@ -164,24 +282,56 @@ exports.getProfileMetaForTabseraQuran = (req, res) => {
 exports.getCitiesForTabseraQuran = (req, res) => {
   const { country } = req.params;
   const cities = {
-    Somalia: ["Mogadishu", "Hargeisa", "Kismayo"],
-    Egypt: ["Cairo", "Alexandria"],
+    Somalia: ["Mogadishu", "Hargeisa", "Bosaso"],
+    Egypt: ["Cairo", "Alexandria", "Giza"],
   };
   res.json({ cities: cities[country] || [] });
 };
 
-exports.deleteTabseraQuranUser = (req, res) => {
-  const index = users.findIndex((u) => u.id === req.user.id);
-  if (index === -1) return res.status(404).json({ message: "User not found" });
+exports.deleteTabseraQuranUser = async (req, res) => {
+  try {
+    const userId = req.user.id;
 
-  users.splice(index, 1);
-  res.json({ message: "User deleted" });
+    const deleted = await User.findByIdAndDelete(userId);
+    if (!deleted) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.status(200).json({ message: "User deleted successfully" });
+  } catch (err) {
+    console.error("Delete error:", err);
+    res.status(500).json({ message: "Failed to delete user" });
+  }
 };
 
-exports.googleSetup = (req, res) => {
-  const user = users.find((u) => u.id === req.user.id);
-  if (!user) return res.status(404).json({ message: "User not found" });
+exports.googleSetup = async (req, res) => {
+  try {
+    const { tokenId, gender, country, language } = req.body;
 
-  user.googleLinked = true;
-  res.json({ message: "Google account linked" });
+    // Verify Google ID token
+    const ticket = await client.verifyIdToken({ idToken: tokenId });
+    const payload = ticket.getPayload();
+
+    const { email, given_name, family_name, name } = payload;
+
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Update fields from both token and request
+    user.email = email;
+    user.firstName = given_name || name?.split(" ")[0] || user.firstName;
+    user.lastName = family_name || name?.split(" ")[1] || user.lastName;
+    user.userName = user.userName || email.split("@")[0];
+    user.googleLinked = true;
+    user.gender = gender;
+    user.country = country;
+    user.language = language;
+
+    await user.save();
+
+    res.status(200).json({ message: "Google setup completed", user });
+  } catch (err) {
+    console.error("Google setup error:", err);
+    res.status(500).json({ message: "Google setup failed" });
+  }
 };

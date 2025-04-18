@@ -1,40 +1,31 @@
-const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const config = require("../config");
 
-const getTabseraAccessToken = async (req, res) => {
-  try {
-    const { clientId, clientSecret } = req.body;
+exports.getTabseraAccessToken = (req, res) => {
+  const { clientId, clientSecret } = req.body;
 
-    if (clientId !== config.tabseraQuranClient.clientId) {
-      return res.status(400).json({ message: "Client ID is incorrect" });
-    }
+  const expectedClientId = config.tabseraQuranClient.clientId;
+  const expectedHashedSecret = config.tabseraQuranClient.clientSecretHash;
+  const hmacKey = config.tabseraQuranClient.clientHmacHashingKey;
 
-    const hmac = crypto.createHmac(
-      "sha256",
-      config.tabseraQuranClient.clientHmacHashingKey
-    );
-    hmac.update(clientSecret);
-    const secretHash = hmac.digest("hex");
-
-    if (secretHash !== config.tabseraQuranClient.clientSecret) {
-      return res.status(400).json({ message: "Client secret is incorrect" });
-    }
-
-    const accessToken = jwt.sign(
-      { clientId },
-      config.tabseraQuranClient.clientTokenSecretKey,
-      { expiresIn: "1d" }
-    );
-
-    return res.status(200).json({
-      accessToken,
-    });
-  } catch (err) {
-    return res.status(500).json({ message: "Internal Server Error" });
+  if (clientId !== expectedClientId) {
+    return res.status(403).json({ message: "Invalid client ID" });
   }
-};
 
-module.exports = {
-  getTabseraAccessToken,
+  const hmac = crypto.createHmac("sha256", hmacKey);
+  hmac.update(clientSecret);
+  const calculatedSecretHash = hmac.digest("hex");
+
+  if (calculatedSecretHash !== expectedHashedSecret) {
+    return res.status(403).json({ message: "Invalid client secret" });
+  }
+
+  const token = jwt.sign(
+    { clientId },
+    config.tabseraQuranClient.clientTokenSecretKey,
+    { expiresIn: "2h" }
+  );
+
+  res.json({ token });
 };

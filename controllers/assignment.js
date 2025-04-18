@@ -1,86 +1,118 @@
-const assignments = [
-  { id: 1, courseId: 1, title: "Recite Surah Al-Fatiha", isLocked: false },
-  { id: 2, courseId: 2, title: "Recite Ayahs 1–10", isLocked: false },
-];
+const Assignment = require("../models/assignment");
+const Submission = require("../models/submission");
 
-const submissions = [];
+exports.addStudentAssignmentSubmissionForTabseraQuran = async (req, res) => {
+  try {
+    const { assignmentId, ayah } = req.body;
+    const studentId = req.user.id;
 
-exports.addStudentAssignmentSubmissionForTabseraQuran = (req, res) => {
-  const { assignmentId, ayah } = req.body;
-  const studentId = req.user.id;
+    const files = req.files?.map((f) => f.originalname) || [];
 
-  submissions.push({
-    id: Date.now(),
-    studentId,
-    assignmentId,
-    files: req.files || [],
-    ayah,
-    submittedAt: new Date(),
-  });
+    await Submission.create({
+      studentId,
+      assignmentId,
+      files,
+      ayah,
+    });
 
-  res.status(201).json({ message: "Assignment submitted" });
-};
-
-exports.resubmitAssignmentForTabseraQuran = (req, res) => {
-  const { assignmentId } = req.body;
-  const studentId = req.user.id;
-
-  const submission = submissions.find(
-    (s) => s.assignmentId === assignmentId && s.studentId === studentId
-  );
-
-  if (!submission) {
-    return res.status(404).json({ message: "No original submission found" });
+    res.status(201).json({ message: "Assignment submitted" });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to submit assignment" });
   }
-
-  submission.files = req.files || [];
-  submission.resubmittedAt = new Date();
-
-  res.json({ message: "Assignment resubmitted" });
 };
 
-exports.lockAssignmentForTabseraQuran = (req, res) => {
-  const assignment = assignments.find((a) => a.id === parseInt(req.params.id));
-  if (!assignment)
-    return res.status(404).json({ message: "Assignment not found" });
+exports.resubmitAssignmentForTabseraQuran = async (req, res) => {
+  try {
+    const { assignmentId } = req.body;
+    const studentId = req.user.id;
 
-  assignment.isLocked = true;
-  res.json({ message: "Assignment locked" });
+    const submission = await Submission.findOne({ assignmentId, studentId });
+    if (!submission) {
+      return res.status(404).json({ message: "Original submission not found" });
+    }
+
+    submission.files = req.files?.map((f) => f.originalname) || [];
+    submission.updatedAt = new Date();
+    await submission.save();
+
+    res.json({ message: "Resubmission successful" });
+  } catch (err) {
+    res.status(500).json({ message: "Resubmission failed" });
+  }
 };
 
-exports.unlockAssignmentForTabseraQuran = (req, res) => {
-  const assignment = assignments.find((a) => a.id === parseInt(req.params.id));
-  if (!assignment)
-    return res.status(404).json({ message: "Assignment not found" });
+exports.lockAssignmentForTabseraQuran = async (req, res) => {
+  try {
+    const assignment = await Assignment.findByIdAndUpdate(
+      req.params.id,
+      { isLocked: true },
+      { new: true }
+    );
+    if (!assignment)
+      return res.status(404).json({ message: "Assignment not found" });
 
-  assignment.isLocked = false;
-  res.json({ message: "Assignment unlocked" });
+    res.json({ message: "Assignment locked" });
+  } catch (err) {
+    res.status(500).json({ message: "Locking failed" });
+  }
 };
 
-exports.giveFeedbackOnTabseraQuranAssignmentSubmission = (req, res) => {
-  const { assignmentId, feedback } = req.body;
-  const submission = submissions.find((s) => s.assignmentId === assignmentId);
+exports.unlockAssignmentForTabseraQuran = async (req, res) => {
+  try {
+    const assignment = await Assignment.findByIdAndUpdate(
+      req.params.id,
+      { isLocked: false },
+      { new: true }
+    );
+    if (!assignment)
+      return res.status(404).json({ message: "Assignment not found" });
 
-  if (!submission)
-    return res.status(404).json({ message: "Submission not found" });
-
-  submission.feedback = feedback;
-  res.json({ message: "Feedback recorded" });
+    res.json({ message: "Assignment unlocked" });
+  } catch (err) {
+    res.status(500).json({ message: "Unlocking failed" });
+  }
 };
 
-exports.getLastAssignmentEndingAyahForTabseraQuran = (req, res) => {
-  const studentId = req.user.id;
-  const studentSubs = submissions
-    .filter((s) => s.studentId === studentId)
-    .sort((a, b) => b.submittedAt - a.submittedAt);
+exports.giveFeedbackOnTabseraQuranAssignmentSubmission = async (req, res) => {
+  try {
+    const { assignmentId, feedback } = req.body;
 
-  if (studentSubs.length === 0) return res.json({ ayah: null });
+    const submission = await Submission.findOne({ assignmentId });
+    if (!submission)
+      return res.status(404).json({ message: "Submission not found" });
 
-  res.json({ ayah: studentSubs[0].ayah || "Ayah not specified" });
+    submission.feedback = feedback;
+    await submission.save();
+
+    res.json({ message: "Feedback saved" });
+  } catch (err) {
+    res.status(500).json({ message: "Feedback failed" });
+  }
 };
 
-exports.getAssignmentsByUserIdForTabseraQuran = (req, res) => {
-  const userId = req.user.id;
-  const mySubs = submissions.filter((s) => s.studentId === userId);
-  res.json({ submissions: mySubs });
+exports.getLastAssignmentEndingAyahForTabseraQuran = async (req, res) => {
+  try {
+    const studentId = req.user.id;
+
+    const last = await Submission.find({ studentId })
+      .sort({ createdAt: -1 })
+      .limit(1);
+
+    if (last.length === 0) {
+      return res.json({ ayah: null });
+    }
+
+    res.json({ ayah: last[0].ayah || "Not specified" });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to get last ayah" });
+  }
+};
+
+exports.getAssignmentsByUserIdForTabseraQuran = async (req, res) => {
+  try {
+    const submissions = await Submission.find({ studentId: req.user.id });
+    res.json({ submissions });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to get assignments" });
+  }
 };

@@ -19,23 +19,28 @@ exports.accessTokenValidator = validate(
 // Students
 exports.registerUserValidator = validate(
   Joi.object({
-    name: Joi.string().required(),
+    firstName: Joi.string().min(2).max(50).required(),
+    lastName: Joi.string().min(1).max(50).required(),
+    userName: Joi.string().min(3).max(30).required(),
     email: Joi.string().email().required(),
-    password: Joi.string().min(6).required(),
+    password: Joi.string().min(5).max(100).required(),
+    country: Joi.string().required(),
+    gender: Joi.string().valid("Male", "Female").required(),
+    language: Joi.string().required(),
   })
 );
 
 exports.confirmUserValidator = validate(
   Joi.object({
     email: Joi.string().email().required(),
-    code: Joi.string().length(6).required(),
+    otp: Joi.string().length(6).required(),
   })
 );
 
 exports.loginUserValidator = validate(
   Joi.object({
     email: Joi.string().email().required(),
-    password: Joi.string().required(),
+    password: Joi.string().min(5).required(),
   })
 );
 
@@ -48,6 +53,9 @@ exports.googleLoginValidator = validate(
 exports.googleSetupValidator = validate(
   Joi.object({
     tokenId: Joi.string().required(),
+    gender: Joi.string().valid("Male", "Female").required(),
+    country: Joi.string().required(),
+    language: Joi.string().required(),
   })
 );
 
@@ -72,10 +80,32 @@ exports.forgotPasswordValidator = validate(
 exports.resetPasswordValidator = validate(
   Joi.object({
     email: Joi.string().email().required(),
-    code: Joi.string().required(),
-    password: Joi.string().min(6).required(),
+    otp: Joi.string().length(6).required(),
+    password: Joi.string().min(6).max(100).required(),
   })
 );
+
+exports.studentCoursesValidator = (req, res, next) => {
+  const { value, error } = Joi.object({
+    studentId:
+      req.user?.role === userTypes.student
+        ? Joi.forbidden()
+        : Joi.string()
+            .regex(/^[0-9a-fA-F]{24}$/)
+            .required(),
+    sort: Joi.string().optional().default("_id"),
+    sortDirection: Joi.number().integer().optional().default(1),
+    page: Joi.number().integer().optional().default(0),
+    limit: Joi.number().integer().optional().default(5),
+  }).validate(req.query);
+
+  if (error) {
+    return res.status(400).json({ message: error.details[0].message });
+  }
+
+  req.query = value;
+  next();
+};
 
 // Teachers
 exports.teacherLoginValidator = validate(
@@ -110,9 +140,15 @@ exports.idValidator = validate(
 
 exports.paginationValidator = validate(
   Joi.object({
-    page: Joi.number().optional(),
-    limit: Joi.number().optional(),
-  })
+    type: Joi.string()
+      .valid("active", "completed", "revoked")
+      .default("active"),
+    page: Joi.number().integer().min(0).default(0),
+    limit: Joi.number().integer().min(1).default(10),
+    sort: Joi.string().default("name"),
+    sortDirection: Joi.number().valid(1, -1).default(1),
+  }),
+  "query"
 );
 
 // Assignments
@@ -163,6 +199,16 @@ exports.khatmahTeamCodeAndIdValidator = validate(
 exports.updateDailyTargetValidator = validate(
   Joi.object({
     dailyTarget: Joi.number().required(),
+  })
+);
+
+exports.udpateKhatmahMemberProgress = validate(
+  Joi.object({
+    progress: Joi.object({
+      completed: Joi.boolean().optional(),
+      currentAyah: Joi.string().optional(),
+      notes: Joi.string().optional(),
+    }).required(),
   })
 );
 
