@@ -129,33 +129,50 @@ exports.loginTabseraQuran = async (req, res) => {
 
 exports.googleLoginTabseraQuran = async (req, res) => {
   try {
-    const { email } = req.body;
+    const { token } = req.body;
+
+    // Verify Google token
+    const ticket = await client.verifyIdToken({ idToken: token });
+    const payload = ticket.getPayload();
+
+    const { email, given_name, family_name, name } = payload;
+
+    // Try finding the user
     let user = await User.findOne({ email });
 
+    // If not found, create it
     if (!user) {
       user = await User.create({
-        name: "Google User",
+        firstName: given_name || name?.split(" ")[0],
+        lastName: family_name || name?.split(" ")[1],
+        userName: email.split("@")[0],
         email,
-        role: "student",
-        confirmed: true,
         googleLinked: true,
+        confirmed: true, // since Google verifies email
+        role: "student",
       });
     }
 
-    const token = jwt.sign(
+    // Generate app token
+    const appToken = jwt.sign(
       { id: user._id, role: user.role },
       process.env.JWT_SECRET,
-      {
-        expiresIn: "1d",
-      }
+      { expiresIn: "1d" }
     );
 
-    res.json({
-      token,
-      user: { id: user._id, name: user.name, email: user.email },
+    res.status(200).json({
+      token: appToken,
+      user: {
+        id: user._id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        googleLinked: user.googleLinked,
+      },
     });
   } catch (err) {
-    res.status(500).json({ message: "Google login failed" });
+    console.error("Google login error:", err);
+    res.status(401).json({ message: "Google login failed" });
   }
 };
 
@@ -165,6 +182,9 @@ exports.resendCodeForTabseraQuran = async (req, res) => {
 
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: "User not found" });
+
+    if (user.confirmed)
+      return res.status(400).json({ message: "User already confirmed" });
 
     const newCode = Math.floor(100000 + Math.random() * 900000).toString();
     user.confirmationCode = newCode;
@@ -223,8 +243,8 @@ exports.resetPasswordForTabseraQuran = async (req, res) => {
 
 exports.teacherLoginForTabseraQuran = async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const user = await User.findOne({ email, role: "teacher" });
+    const { username, password } = req.body;
+    const user = await User.findOne({ username, role: "teacher" });
 
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ message: "Invalid credentials" });

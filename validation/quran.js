@@ -46,7 +46,7 @@ exports.loginUserValidator = validate(
 
 exports.googleLoginValidator = validate(
   Joi.object({
-    email: Joi.string().email().required(),
+    token: Joi.string().required(),
   })
 );
 
@@ -110,7 +110,7 @@ exports.studentCoursesValidator = (req, res, next) => {
 // Teachers
 exports.teacherLoginValidator = validate(
   Joi.object({
-    email: Joi.string().email().required(),
+    username: Joi.string().required(),
     password: Joi.string().required(),
   })
 );
